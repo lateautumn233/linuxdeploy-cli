@@ -3,7 +3,8 @@
 # (c) Anton Skshidlevsky <meefik@gmail.com>, GPLv3
 
 # 31 doesn't support while rpm2cpio in busybox doesn't support zstd
-[ -n "${SUITE}" ] || SUITE="30"
+#[ -n "${SUITE}" ] || SUITE="33"
+SUITE="33"
 
 if [ -z "${ARCH}" ]
 then
@@ -33,12 +34,12 @@ do_install()
 
     msg ":: Installing ${COMPONENT} ... "
 
-    local core_packages="acl alternatives audit-libs basesystem bash brotli bzip2-libs ca-certificates coreutils coreutils-common cracklib crypto-policies cryptsetup-libs curl cyrus-sasl-lib dbus dbus-broker dbus-common device-mapper device-mapper-libs dnf dnf-data dnf-yum elfutils-default-yama-scope elfutils-libelf elfutils-libs expat fedora-gpg-keys fedora-release fedora-release-common fedora-repos file-libs filesystem findutils gawk gdbm-libs glib2 glibc glibc-common glibc-minimal-langpack gmp gnupg2 gnutls gpgme grep gzip ima-evm-utils iptables-libs json-c keyutils-libs kmod-libs krb5-libs libacl libarchive libargon2 libassuan libattr libblkid libcap libcap-ng libcom_err libcomps libcurl libdb libdb-utils libdnf libfdisk libffi libgcc libgcrypt libgpg-error libidn2 libksba libmetalink libmodulemd1 libmount libnghttp2 libnsl2 libpcap libpsl libpwquality librepo libreport-filesystem libseccomp libselinux libsemanage libsepol libsigsegv libsmartcols libsolv libssh libsss_idmap libsss_nss_idmap libstdc++ libtasn1 libtirpc libunistring libusbx libutempter libuuid libverto libxcrypt libxml2 libyaml libzstd lua-libs lz4-libs mpfr ncurses ncurses-base ncurses-libs nettle npth openldap openssl-libs p11-kit p11-kit-trust pam pcre pcre2 popt publicsuffix-list-dafsa python3 python3-dnf python3-gpg python3-hawkey python3-libcomps python3-libdnf python3-libs python3-rpm python-pip-wheel python-setuptools-wheel qrencode-libs readline rootfiles rpm rpm-build-libs rpm-libs rpm-sign-libs sed setup shadow-utils sqlite-libs sssd-client sudo systemd systemd-libs systemd-pam systemd-rpm-macros tar tzdata util-linux vim-minimal xz-libs zchunk-libs zlib"
+    local core_packages="libgcc crypto-policies fedora-release-identity-container tzdata python-setuptools-wheel pcre2-syntax ncurses-base libssh-config libreport-filesystem dnf-data fedora-gpg-keys fedora-release-container fedora-repos fedora-release-common setup filesystem basesystem glibc-minimal-langpack glibc-common glibc ncurses-libs bash zlib bzip2-libs xz-libs libzstd sqlite-libs libdb gmp libcap libcom_err libgpg-error libuuid libxcrypt popt libxml2 readline lua-libs elfutils-libelf file-libs expat libattr libacl libffi p11-kit libsmartcols libstdc++ libunistring libidn2 libassuan libgcrypt alternatives json-c keyutils-libs libcap-ng audit-libs libsepol libtasn1 p11-kit-trust lz4-libs pcre grep pcre2 libselinux sed libsemanage shadow-utils libutempter vim-minimal libpsl libcomps libmetalink libksba mpfr nettle gnutls elfutils-default-yama-scope elfutils-libs gdbm-libs libbrotli libeconf libgomp libnghttp2 libsigsegv gawk libsss_idmap libsss_nss_idmap libverto libyaml npth coreutils-common openssl-libs coreutils ca-certificates krb5-libs libtirpc libblkid libmount glib2 libnsl2 systemd-libs zchunk-libs libusbx libfdisk cyrus-sasl-lib openldap gnupg2 gpgme libssh libcurl curl librepo tpm2-tss ima-evm-utils python-pip-wheel python3 python3-libs python3-libcomps python3-gpg gzip cracklib libpwquality pam libarchive rpm rpm-libs libmodulemd libsolv libdnf python3-libdnf python3-hawkey rpm-build-libs rpm-sign-libs python3-rpm python3-dnf dnf yum sssd-client sudo util-linux tar fedora-repos-modular rootfiles"
 
     local repo_url
     if [ "${ARCH}" = "i386" ]
     then repo_url="${SOURCE_PATH%/}/fedora-secondary/releases/${SUITE}/Everything/${ARCH}/os"
-    else repo_url="${SOURCE_PATH%/}/fedora/linux/releases/${SUITE}/Everything/${ARCH}/os"
+    else repo_url="https://mirrors.bfsu.edu.cn/fedora/releases/${SUITE}/Everything/${ARCH}/os"
     fi
 
     msg -n "Preparing for deployment ... "
@@ -76,7 +77,7 @@ do_install()
         done
         [ "${package}" = "filesystem" ] && { msg "done"; continue; }
         # unpack
-        (cd "${CHROOT_DIR}"; rpm2cpio "./tmp/${pkg_file}" | cpio -idmu >/dev/null)
+        (cd "${CHROOT_DIR}"; rpmcpio "./tmp/${pkg_file}" | unzstd | cpio -idmuv >/dev/null)
         is_ok "fail" "done" || return 1
     done
 
