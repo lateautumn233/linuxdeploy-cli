@@ -206,12 +206,12 @@ chroot_exec()
     chroot)
         if [ -n "${username}" ]; then
             if [ $# -gt 0 ]; then
-                unshare -R "${CHROOT_DIR}" /bin/su - ${username} -c "$*"
+                chroot "${CHROOT_DIR}" /bin/su - ${username} -c "$*"
             else
-                unshare -R "${CHROOT_DIR}" /bin/su - ${username}
+                chroot "${CHROOT_DIR}" /bin/su - ${username}
             fi
         else
-            PATH="${path}" unshare -R "${CHROOT_DIR}" $*
+            PATH="${path}" chroot "${CHROOT_DIR}" $*
         fi
     ;;
     proot)
