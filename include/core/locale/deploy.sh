@@ -22,6 +22,7 @@ do_configure()
     ;;
     fedora)
         echo "LANG=${LOCALE}" > "${CHROOT_DIR}/etc/sysconfig/i18n"
+        echo "LANG=${LOCALE}" > "${CHROOT_DIR}/etc/locale.conf"
     ;;
     slackware)
         sed -i "s|^export LANG=.*|export LANG=${LOCALE}|g" "${CHROOT_DIR}/etc/profile.d/lang.sh"
