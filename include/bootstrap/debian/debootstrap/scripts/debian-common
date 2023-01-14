@@ -40,12 +40,28 @@ work_out_debs () {
 		esac
 		;;
 	esac
+
+	# On suites >= bookworm, either we set up a merged-/usr system
+	# via setup_merged_usr, or we deliberately avoided that migration
+	# by creating the flag file. This means there's no need for the
+	# live migration 'usrmerge' package and its extra dependencies:
+	# we can install the empty 'usr-is-merged' metapackage to indicate
+	# that the transition has been done.
+	case "$CODENAME" in
+		etch*|lenny|squeeze|wheezy|jessie*|stretch|buster|bullseye)
+			;;
+		*)
+			required="$required usr-is-merged"
+			EXCLUDE_DEPENDENCY="$EXCLUDE_DEPENDENCY usrmerge"
+			;;
+	esac
 }
 
 first_stage_install () {
-	# Set up correct EXTRACT_DEB_TAR_OPTIONS
 	case "$CODENAME" in
+		# "merged-usr" blacklist for past releases
 		etch*|lenny|squeeze|wheezy|jessie*)
+			[ -z "$MERGED_USR" ] && MERGED_USR="no"
 			;;
 		*)
 			# see https://bugs.debian.org/838388
@@ -53,16 +69,9 @@ first_stage_install () {
 			;;
 	esac
 
-	case "$CODENAME" in
-		# If not specified, default to split-usr on older releases
-		etch*|lenny|squeeze|wheezy|jessie*|stretch|ascii|buster|beowulf|bullseye)
-			[ -z "$MERGED_USR" ] && MERGED_USR="no"
-			;;
-		# Always use merged-usr on bookworm+ and its derivatives
-		*)
-			MERGED_USR="yes"
-			;;
-	esac
+	if [ "$CODENAME" = "stretch" ] && [ -z "$MERGED_USR" ]; then
+		MERGED_USR="no"
+	fi
 
 	setup_merged_usr
 	extract $required
