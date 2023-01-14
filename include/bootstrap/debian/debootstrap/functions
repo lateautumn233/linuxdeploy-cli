@@ -78,7 +78,7 @@ progress_next () {
 }
 
 wgetprogress () {
-	[ ! "$VERBOSE" ] && QSWITCH="-q"
+	[ ! "$VERBOSE" ] && NVSWITCH="-nv"
 	local ret=0
 	if [ "$USE_DEBIANINSTALLER_INTERACTION" ] && [ "$PROGRESS_NEXT" ]; then
 		# The exit status of a pipeline is that of the last command in
@@ -94,7 +94,7 @@ wgetprogress () {
 		ret=$({ { wget $@ 2>&1 >/dev/null || echo $? >&2; } | "$PKGDETAILS" "WGET%" "$PROGRESS_NOW" "$PROGRESS_NEXT" "$PROGRESS_END" >&3; } 2>&1)
 		: ${ret:=0}
 	else
-		wget ${QSWITCH:+"$QSWITCH"} "$@"
+		wget ${NVSWITCH:+"$NVSWITCH"} "$@"
 		ret=$?
 	fi
 	return $ret
@@ -227,6 +227,20 @@ keyring () {
 				fi
 			fi
 		fi
+	fi
+}
+
+detect_container () {
+	if [ "$container" = lxc ]; then
+		CONTAINER="lxc"
+	elif grep -qs container=lxc-libvirt /proc/1/environ; then
+		CONTAINER="lxc-libvirt"
+	elif grep -qs ^systemd-nspawn$ /run/systemd/container || grep -qs systemd-nspawn /proc/1/environ || [ "$container" = "systemd-nspawn" ]; then
+		CONTAINER="systemd-nspawn"
+	elif grep -qs '[[:space:]]/docker/.*/sys/fs/cgroup' /proc/1/mountinfo || [ -e "/.dockerenv" ]; then
+		CONTAINER="docker"
+	else
+		CONTAINER=""
 	fi
 }
 
@@ -393,7 +407,7 @@ get () {
 			fi
 			if [ ! -e "$dest2" ]; then
 				if [ -z "$from2" ] || ! just_get "$from2" "$dest2"; then
-					if ! just_get "$from" "$dest2"; then continue 1; fi
+					if ! just_get "$from" "$dest2"; then continue 2; fi
 				fi
 			fi
 			if [ "$checksum" != "" ]; then
@@ -492,12 +506,12 @@ apt_dest () {
 	    pkg)
 		local m="$5"
 		printf "%s" "$APTSTATE/lists/"
-		echo "${m}_$6" | sed -e 's,^[^:]*://,,' -e 's/\//_/g'
+		echo "${m}_$6" | sed -e 's,^[^:]\+://,,' -e 's/\//_/g'
 		;;
 	    rel)
 		local m="$3"
 		printf "%s" "$APTSTATE/lists/"
-		echo "${m}_$4" | sed -e 's,^[^:]*://,,' -e 's/\//_/g'
+		echo "${m}_$4" | sed -e 's,^[^:]\+://,,' -e 's/\//_/g'
 		;;
 	esac
 }
@@ -1130,22 +1144,198 @@ setup_etc () {
 	conditional_cp /etc/hostname "$TARGET"
 }
 
-setup_proc () {
-	return 0;
+UMOUNT_DIRS=
+
+umount_exit_function () {
+	local realdir dir
+	for dir in $UMOUNT_DIRS; do
+		realdir="$(in_target_nofail readlink -f "$dir")"
+		[ "$realdir" ] || continue
+		( cd / ; umount "$TARGET/${realdir#/}" ) || true
+	done
 }
 
- # create the static device nodes
- setup_devices () {
-	 return 0
+umount_on_exit () {
+	if [ "$UMOUNT_DIRS" ]; then
+		UMOUNT_DIRS="$1 $UMOUNT_DIRS"
+	else
+		UMOUNT_DIRS="$1"
+		on_exit umount_exit_function
+	fi
+}
+
+clear_mtab () {
+	if [ -f "$TARGET/etc/mtab" ] && [ ! -h "$TARGET/etc/mtab" ]; then
+		rm -f "$TARGET/etc/mtab"
+	fi
+}
+
+setup_proc () {
+	case "$HOST_OS" in
+	    *freebsd*)
+		umount_on_exit /dev
+		umount_on_exit /proc
+		umount "$TARGET/proc" 2>/dev/null || true
+		if [ "$HOST_OS" = kfreebsd ]; then
+			in_target mount -t linprocfs proc /proc
+		else
+			mount -t linprocfs proc "$TARGET/proc"
+		fi
+		;;
+	    hurd*)
+		# firmlink $TARGET/{dev,servers,proc} to the system ones.
+		settrans -a "$TARGET/dev" /hurd/firmlink /dev
+		settrans -a "$TARGET/servers" /hurd/firmlink /servers
+		settrans -a "$TARGET/proc" /hurd/firmlink /proc
+		;;
+	    *)
+		umount_on_exit /dev/pts
+		umount_on_exit /dev/shm
+		umount_on_exit /proc
+		umount_on_exit /proc/bus/usb
+		if [ -L "$TARGET/proc" ];then
+			rm -f $TARGET/proc
+			mkdir $TARGET/proc
+		else
+			umount "$TARGET/proc" 2>/dev/null || true
+		fi
+
+		# some container environment are used at second-stage, it already treats /proc and so on
+		if [ -z "$(ls -A "$TARGET/proc")" ]; then
+			# second-stage in docker, we cannot detect it is inside docker... just ignore warning
+			in_target mount -t proc proc /proc || true
+			umount_on_exit /proc
+		fi
+		if [ -n "$(ls -A "$TARGET/sys")" ] && \
+			grep -qs '[[:space:]]sysfs' "$TARGET/proc/filesystems" || \
+                   [ "$CONTAINER" = "docker" ]; then
+				umount_on_exit /sys
+				umount "$TARGET/sys" 2>/dev/null || true
+		else
+			# second-stage in docker, we cannot detect it is inside docker... just ignore warning
+			in_target mount -t sysfs sysfs /sys || true
+			umount_on_exit /sys
+		fi
+		on_exit clear_mtab
+		;;
+	esac
+	umount_on_exit /lib/init/rw
 }
 
 setup_proc_symlink () {
-	return 0;
+	rm -rf "$TARGET/proc"
+	ln -s /proc "$TARGET"
+}
+
+# create the static device nodes
+setup_devices () {
+	if doing_variant fakechroot; then
+		setup_devices_fakechroot
+		return 0
+	fi
+
+	case "$HOST_OS" in
+	    kfreebsd*)
+		;;
+	    freebsd)
+		;;
+	    hurd*)
+		;;
+	    *)
+		if [ "$CONTAINER" = "lxc" ] || [ "$CONTAINER" = "lxc-libvirt" ]; then
+			if ! setup_devices_simple; then
+				setup_devices_bind
+			fi
+			return 0
+		fi
+
+		setup_devices_simple
+		;;
+	esac
 }
 
 # enable the dynamic device nodes
 setup_dynamic_devices () {
-	return 0
+	if doing_variant fakechroot; then
+		return 0
+	fi
+
+	case "$HOST_OS" in
+	    kfreebsd*)
+		in_target mount -t devfs devfs /dev ;;
+	    freebsd)
+		mount -t devfs devfs "$TARGET/dev" ;;
+	    hurd*)
+	        # Use the setup-translators of the hurd package
+	        in_target /usr/lib/hurd/setup-translators -k ;;
+	esac
+}
+
+# Create a device node if it does not exist. By default, the mode is 666.
+mknod_if_needed () {
+	local device type major minor mode
+	device="$1"
+	type="$2"
+	major="$3"
+	minor="$4"
+	mode="${5:-666}"
+
+	if [ ! -e "$device" ]; then
+		mknod -m "$mode" "$device" "$type" "$major" "$minor"
+	fi
+}
+
+
+setup_devices_simple () {
+	# The list of devices that can be created in a container comes from
+	# src/core/cgroup.c in the systemd source tree.
+	mknod_if_needed "$TARGET/dev/null"        c 1 3
+	mknod_if_needed "$TARGET/dev/zero"        c 1 5
+	mknod_if_needed "$TARGET/dev/full"        c 1 7
+	mknod_if_needed "$TARGET/dev/random"      c 1 8
+	mknod_if_needed "$TARGET/dev/urandom"     c 1 9
+	mknod_if_needed "$TARGET/dev/tty"         c 5 0
+	if [ ! "$CONTAINER" = "systemd-nspawn" ]; then
+		mknod_if_needed "$TARGET/dev/console"     c 5 1
+	fi
+	# To avoid pre-exist directory causes error, specify "-p" option
+        mkdir -p "$TARGET/dev/pts/" "$TARGET/dev/shm/"
+	# Inside a container, we might not be allowed to create /dev/ptmx.
+	# If not, do the next best thing.
+	if ! mknod_if_needed "$TARGET/dev/ptmx"  c 5 2; then
+		warning MKNOD "Could not create /dev/ptmx, falling back to symlink. This chroot will require /dev/pts mounted with ptmxmode=666"
+		ln -sf pts/ptmx "$TARGET/dev/ptmx"
+	fi
+	ln -sf /proc/self/fd   "$TARGET/dev/fd"
+	ln -sf /proc/self/fd/0 "$TARGET/dev/stdin"
+	ln -sf /proc/self/fd/1 "$TARGET/dev/stdout"
+	ln -sf /proc/self/fd/2 "$TARGET/dev/stderr"
+}
+
+setup_devices_fakechroot () {
+	rm -rf "$TARGET/dev"
+	ln -s /dev "$TARGET"
+}
+
+setup_devices_bind () {
+	local device
+	mount -t tmpfs nodev "$TARGET/dev"
+	umount_on_exit /dev
+	for device in null zero full random urandom tty pts shm ptmx; do
+		if [ -d "/dev/$device" ]; then
+			mkdir "$TARGET/dev/$device"
+		elif [ -c "/dev/$device" ]; then
+			touch "$TARGET/dev/$device"
+		else
+			continue
+		fi
+		mount -o bind "/dev/$device" "$TARGET/dev/$device"
+		umount_on_exit "/dev/$device"
+	done
+	ln -s /proc/self/fd   "$TARGET/dev/fd"
+	ln -s /proc/self/fd/0 "$TARGET/dev/stdin"
+	ln -s /proc/self/fd/1 "$TARGET/dev/stdout"
+	ln -s /proc/self/fd/2 "$TARGET/dev/stderr"
 }
 
 setup_dselect_method () {
@@ -1352,7 +1542,7 @@ elif [ -e "/usr/lib/debootstrap/pkgdetails" ]; then
 elif [ -e "$DEBOOTSTRAP_DIR/pkgdetails" ]; then
 	PKGDETAILS="$DEBOOTSTRAP_DIR/pkgdetails"
 else
-	PKGDETAILS="$(which pkgdetails)"
+	PKGDETAILS=""
 fi
 
 ##################################################### dependency resolution
@@ -1418,6 +1608,49 @@ get_next_predep () {
 }
 
 ################################################################### helpers
+
+# Return zero if it is possible to create devices and execute programs in
+# this directory. (Both may be forbidden by mount options, e.g. nodev and
+# noexec respectively.)
+check_sane_mount () {
+	mkdir -p "$1"
+
+	case "$HOST_OS" in
+	    *freebsd*|hurd*)
+		;;
+	    *)
+		if ! doing_variant fakechroot; then
+		case "$CONTAINER" in
+		  lxc|lxc-libvirt)
+		    ;;
+		  *)
+		    mknod "$1/test-dev-null" c 1 3 || return 1
+		    if ! echo test > "$1/test-dev-null"; then
+			rm -f "$1/test-dev-null"
+				return 1
+		    fi
+		    rm -f "$1/test-dev-null"
+		    ;;
+		esac
+		fi
+	esac
+
+	SH="/bin/sh"
+	[ -x "$SH" ] || SH="$(which sh)"
+
+	cat > "$1/test-exec" <<EOF
+#! $SH
+:
+EOF
+	chmod +x "$1/test-exec"
+	if ! "$1/test-exec"; then
+		rm -f "$1/test-exec"
+		return 1
+	fi
+	rm -f "$1/test-exec"
+
+	return 0
+}
 
 read_gpg_status () {
 	local badsig unkkey validsig

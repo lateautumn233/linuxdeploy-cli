@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-VERSION='1.0.126-meefik'
+VERSION='@VERSION@'
 
 unset TMP TEMP TMPDIR || true
 
@@ -50,6 +50,9 @@ INRELEASE_PATH=""
 
 DEF_MIRROR="http://deb.debian.org/debian"
 DEF_HTTPS_MIRROR="https://deb.debian.org/debian"
+
+# set $CONTAINER
+detect_container
 
 export LANG USE_COMPONENTS
 umask 022
@@ -597,6 +600,16 @@ DEBOOTSTRAP_CHECKSUM_FIELD="SHA$SHA_SIZE"
 
 export ARCH SUITE EXTRA_SUITES TARGET CHROOT_CMD SHA_SIZE DEBOOTSTRAP_CHECKSUM_FIELD
 
+if am_doing_phase first_stage second_stage; then
+	if in_path id && [ "$(id -u)" -ne 0 ]; then
+		error 1 NEEDROOT "debootstrap can only run as root"
+	fi
+	# Ensure that we can create working devices and executables on the target.
+	if ! check_sane_mount "$TARGET"; then
+		error 1 NOEXEC "Cannot install into target '$TARGET' mounted with noexec or nodev"
+	fi
+fi
+
 if [ ! -e "$SCRIPT" ]; then
 	error 1 NOSCRIPT "No such script: %s" "$SCRIPT"
 fi
@@ -748,14 +761,13 @@ if am_doing_phase dldebs; then
 fi
 
 if am_doing_phase save_variables; then
-	cp "$DEBOOTSTRAP_DIR/debootstrap"				 "$TARGET/debootstrap/debootstrap"
+	cp "$0"				 "$TARGET/debootstrap/debootstrap"
 	cp "$DEBOOTSTRAP_DIR/functions"	 "$TARGET/debootstrap/functions"
 	cp "$SCRIPT"			 "$TARGET/debootstrap/suite-script"
 	# pick up common setting scripts
 	cp "$DEBOOTSTRAP_DIR"/scripts/*-common	"$TARGET/debootstrap/"
 	echo "$ARCH"			>"$TARGET/debootstrap/arch"
 	echo "$SUITE"			>"$TARGET/debootstrap/suite"
-	echo "$USER_MIRROR"		>"$TARGET/debootstrap/mirror"
 	[ "" = "$EXTRA_SUITES" ] ||
 	echo "$EXTRA_SUITES"		>"$TARGET/debootstrap/extra-suites"
 	[ "" = "$VARIANT" ] ||
@@ -786,7 +798,7 @@ if am_doing_phase first_stage; then
 	first_stage_install
 
 	if ! am_doing_phase second_stage; then
-		cp "$DEBOOTSTRAP_DIR/debootstrap"				 "$TARGET/debootstrap/debootstrap"
+		cp "$0"				 "$TARGET/debootstrap/debootstrap"
 		cp "$DEBOOTSTRAP_DIR/functions"	 "$TARGET/debootstrap/functions"
 		cp "$SCRIPT"			 "$TARGET/debootstrap/suite-script"
 		# pick up common setting scripts
@@ -850,6 +862,6 @@ fi
 if am_doing_phase kill_target; then
 	if [ "$KEEP_DEBOOTSTRAP_DIR" != true ]; then
                 info KILLTARGET "Deleting target directory"
-		rm -rf "$TARGET"
+		rm -rf --one-file-system "$TARGET"
 	fi
 fi
