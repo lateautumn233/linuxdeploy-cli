@@ -95,7 +95,7 @@ do_install()
     is_ok "fail" "done"
 
     msg "Installing packages: "
-    pacman_install base $(echo ${core_files} | sed 's/-[0-9].*$//') ${EXTRA_PACKAGES}
+    pacman_install base echo ${core_files} | sed 's/ /\n/g' | awk '{ sub(/-[0-9].*$/,""); print $1 }' ${EXTRA_PACKAGES}
     is_ok || return 1
 
     msg -n "Clearing cache ... "
