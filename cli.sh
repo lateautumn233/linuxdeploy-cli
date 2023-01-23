@@ -206,12 +206,23 @@ chroot_exec()
     chroot)
         if [ -n "${username}" ]; then
             if [ $# -gt 0 ]; then
-                chroot "${CHROOT_DIR}" /bin/su - ${username} -c "$*"
+                chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" /bin/su - ${username} -c "$*"
             else
-                chroot "${CHROOT_DIR}" /bin/su - ${username}
+                chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" /bin/su - ${username}
             fi
         else
-            PATH="${path}" chroot "${CHROOT_DIR}" $*
+            PATH="${path}" chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" $*
+        fi
+    ;;
+    unshare)
+        if [ -n "${username}" ]; then
+            if [ $# -gt 0 ]; then
+                unshare ${METHOD_OPTIONS} -R "${CHROOT_DIR}" /bin/su - ${username} -c "$*"
+            else
+                unshare ${METHOD_OPTIONS} -R "${CHROOT_DIR}" /bin/su - ${username}
+            fi
+        else
+            PATH="${path}" unshare ${METHOD_OPTIONS} -R "${CHROOT_DIR}" $*
         fi
     ;;
     proot)
@@ -518,8 +529,10 @@ container_mounted()
 {
     if [ "${METHOD}" = "chroot" ]; then
         is_mounted "${CHROOT_DIR}"
-    else
-        return 0
+    elif [ "${METHOD}" = "unshare" ]; then
+        is_mounted "${CHROOT_DIR}"
+	else
+		return 0
     fi
 }
 
@@ -659,7 +672,7 @@ mount_part()
 
 container_mount()
 {
-    [ "${METHOD}" = "chroot" ] || return 0
+    [ "${METHOD}" = "chroot" ] || [ "${METHOD}" = "unshare" ] || return 0
 
     if [ $# -eq 0 ]; then
         container_mount root proc sys dev shm pts fd tty tun binfmt_misc
