@@ -846,7 +846,7 @@ rootfs_import()
         if [ -e "${rootfs_file}" ]; then
             tar axf "${rootfs_file}" -C "${CHROOT_DIR}"
         elif [ -z "${rootfs_file##http*}" ]; then
-            wget -q -O - "${rootfs_file}" | tar "-I zstdmt" -C "${CHROOT_DIR}"
+            wget -q -O - "${rootfs_file}" | tar x --zstd -C "${CHROOT_DIR}"
         else
             msg "fail"; return 1
         fi
