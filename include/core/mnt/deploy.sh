@@ -16,7 +16,7 @@ do_configure()
 
 do_start()
 {
-    if [ "${METHOD}" = "chroot" -a -n "${MOUNTS}" ]; then
+    if [ "${METHOD}" = "chroot" -a -n "${MOUNTS}" ] || [ "${METHOD}" = "unshare" -a -n "${MOUNTS}" ]; then
         msg ":: Mounting partitions: "
         local item disk_src disk_dst target
         for item in ${MOUNTS}
