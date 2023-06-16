@@ -53,3 +53,4 @@ do_stop()
     chroot_exec -u ${USER_NAME} hostname localhost
     is_ok "fail" "done"
     return 0
+}
