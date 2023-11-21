@@ -62,7 +62,7 @@ do_install()
     component_exec core/emulator core/mnt core/net
 
     unset DEBOOTSTRAP_DIR
-    chroot_exec /debootstrap/debootstrap --no-check-gpg --second-stage
+    chroot_exec /debootstrap/debootstrap --no-check-gpg --second-stage && apt_install -f -qq
     is_ok || return 1
 
     msg -n "Updating repository ... "

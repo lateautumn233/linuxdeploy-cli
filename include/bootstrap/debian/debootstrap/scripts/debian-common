@@ -216,7 +216,7 @@ echo \"Warning: Fake start-stop-daemon called, doing nothing\"" > "$TARGET/sbin/
 		# XXX: progress is tricky due to how dpkg_progress works
 		# -- cjwatson 2009-07-29
 		p; smallyes '' |
-		in_target dpkg --force-overwrite --force-confold --skip-same-version --install $(debfor $predep)
+		in_target dpkg --ignore-depends=systemd --force-overwrite --force-confold --skip-same-version --install $(debfor $predep)
 		base=$(without "$base" "$predep")
 		done_predeps="$done_predeps $predep"
 	done
