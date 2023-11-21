@@ -11,14 +11,17 @@ do_configure()
     if [ ! -e "${login_defs}" ]; then
         touch "${login_defs}"
     fi
-    if ! $(grep -q '^ *UID_MIN' "${login_defs}"); then
-        echo "UID_MIN 5000" >>"${login_defs}"
-        sed -i 's|^[#]\?UID_MIN.*|UID_MIN 5000|' "${login_defs}"
-    fi
-    if ! $(grep -q '^ *GID_MIN' "${login_defs}"); then
-        echo "GID_MIN 5000" >>"${login_defs}"
-        sed -i 's|^[#]\?GID_MIN.*|GID_MIN 5000|' "${login_defs}"
-    fi
+
+	grep -q '^ *UID_MIN' "${login_defs}" || echo "UID_MIN 5000" >>"${login_defs}"
+	sed -i 's|^ *UID_MIN.*|UID_MIN 5000|' "${login_defs}"
+	grep -q '^ *UID_MAX' "${login_defs}" || echo "UID_MAX 10000" >>"${login_defs}"
+	sed -i 's|^ *UID_MAX.*|UID_MAX 10000|' "${login_defs}"
+
+	grep -q '^ *GID_MIN' "${login_defs}" || echo "GID_MIN 5000" >>"${login_defs}"
+	sed -i 's|^ *GID_MIN.*|GID_MIN 5000|' "${login_defs}"
+	grep -q '^ *GID_MAX' "${login_defs}" || echo "GID_MAX 10000" >>"${login_defs}"
+	sed -i 's|^ *GID_MAX.*|GID_MAX 10000|' "${login_defs}"
+
     # add android groups
     if [ -n "${PRIVILEGED_USERS}" ]; then
         local aid
