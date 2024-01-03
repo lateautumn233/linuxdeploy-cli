@@ -51,7 +51,7 @@ do_configure()
 do_start()
 {
     msg -n ":: Starting ${COMPONENT} ... "
-    is_stopped /var/run/sshd.pid /run/sshd.pid || test $(pidof sshd) -eq 0
+    is_stopped /var/run/sshd.pid /run/sshd.pid || test -z $(pidof /data/local/mnt/usr/sbin/sshd)
     is_ok "skip" || return 0
     make_dirs /run/sshd /var/run/sshd
     # generate keys
