@@ -543,6 +543,24 @@ extract_release_components () {
 	fi
 }
 
+repo_supports_arch_all () {
+	local a no_arch_all_support
+	local reldest="$1"; shift
+	TMPARCHS="$(sed -n 's/Architectures: *//p' "$reldest")"
+	ARCH_ALL_SUPPORTED=0
+	for a in $TMPARCHS ; do
+		if [ "$a" = "all" ]; then
+			ARCH_ALL_SUPPORTED=1
+			break
+		fi
+	done
+
+	no_arch_all_support=$(grep "^No-Support-for-Architecture-all: Packages$" "$reldest" || true)
+	if [ "$no_arch_all_support" != "" ]; then
+		ARCH_ALL_SUPPORTED=0
+	fi
+}
+
 CODENAME=""
 validate_suite () {
 	local reldest suite s
@@ -653,7 +671,7 @@ download_release_sig () {
 download_release_indices () {
 	local m1 inreldest reldest relsigdest totalpkgs \
 	      subpath xzi bz2i gzi normi i ext \
-	      donepkgs pkgdest acquirebyhash s c m
+	      donepkgs pkgdest acquirebyhash archs s c a m
 	m1="${MIRRORS%% *}"
 	for s in $SUITE $EXTRA_SUITES; do
 		inreldest="$TARGET/$($DLDEST rel "$s" "$m1" "dists/$s/InRelease")"
@@ -666,70 +684,80 @@ download_release_indices () {
 
 		extract_release_components "$reldest"
 
-		acquirebyhash=$(grep "^Acquire-By-Hash: yes$" "$reldest" || true)
-		totalpkgs=0
-		for c in $COMPONENTS; do
-			subpath="$c/binary-$ARCH/Packages"
-			xzi="$(get_release_checksum "$reldest" "$subpath.xz")"
-			bz2i="$(get_release_checksum "$reldest" "$subpath.bz2")"
-			gzi="$(get_release_checksum "$reldest" "$subpath.gz")"
-			normi="$(get_release_checksum "$reldest" "$subpath")"
-			if [ "$normi" != "" ]; then
-				i="$normi"
-			elif in_path bunzip2 && [ "$bz2i" != "" ]; then
-				i="$bz2i"
-			elif in_path unxz && [ "$xzi" != "" ]; then
-				i="$xzi"
-			elif in_path gunzip && [ "$gzi" != "" ]; then
-				i="$gzi"
-			fi
-			if [ "$i" != "" ]; then
-				totalpkgs=$(( $totalpkgs + ${i#* } ))
-			else
-				mv "$reldest" "$reldest.malformed"
-				error 1 MISSINGRELENTRY "Invalid Release file, no entry for %s" "$subpath"
-			fi
-		done
+		repo_supports_arch_all "$reldest"
 
-		donepkgs=0
-		progress 0 $totalpkgs DOWNPKGS "Downloading Packages files"
-		for c in $COMPONENTS; do
-			subpath="$c/binary-$ARCH/Packages"
-			path="dists/$s/$subpath"
-			xzi="$(get_release_checksum "$reldest" "$subpath.xz")"
-			bz2i="$(get_release_checksum "$reldest" "$subpath.bz2")"
-			gzi="$(get_release_checksum "$reldest" "$subpath.gz")"
-			normi="$(get_release_checksum "$reldest" "$subpath")"
-			ext=""
-			if [ "$acquirebyhash" != "" ]; then
-				ext="$ext byhash"
-			fi
-			if [ "$normi" != "" ]; then
-				ext="$ext $normi ."
-				i="$normi"
-			fi
-			if in_path unxz && [ "$xzi" != "" ]; then
-				ext="$ext $xzi xz"
-				i="${i:-$xzi}"
-			fi
-			if in_path bunzip2 && [ "$bz2i" != "" ]; then
-				ext="$ext $bz2i bz2"
-				i="${i:-$bz2i}"
-			fi
-			if in_path gunzip && [ "$gzi" != "" ]; then
-				ext="$ext $gzi gz"
-				i="${i:-$gzi}"
-			fi
-			progress_next $(($donepkgs + ${i#* }))
-			for m in $MIRRORS; do
-				pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$ARCH" "$m" "$path")"
-				if get "$m/$path" "$pkgdest" $ext; then break; fi
+		archs="$ARCH"
+		if [ $ARCH_ALL_SUPPORTED -eq 1 ]; then
+			archs="all $ARCH"
+		fi
+
+		acquirebyhash=$(grep "^Acquire-By-Hash: yes$" "$reldest" || true)
+
+		for a in $archs; do
+			totalpkgs=0
+			for c in $COMPONENTS; do
+				subpath="$c/binary-$a/Packages"
+				xzi="$(get_release_checksum "$reldest" "$subpath.xz")"
+				bz2i="$(get_release_checksum "$reldest" "$subpath.bz2")"
+				gzi="$(get_release_checksum "$reldest" "$subpath.gz")"
+				normi="$(get_release_checksum "$reldest" "$subpath")"
+				if [ "$normi" != "" ]; then
+					i="$normi"
+				elif in_path bunzip2 && [ "$bz2i" != "" ]; then
+					i="$bz2i"
+				elif in_path unxz && [ "$xzi" != "" ]; then
+					i="$xzi"
+				elif in_path gunzip && [ "$gzi" != "" ]; then
+					i="$gzi"
+				fi
+				if [ "$i" != "" ]; then
+					totalpkgs=$(( $totalpkgs + ${i#* } ))
+				else
+					mv "$reldest" "$reldest.malformed"
+					error 1 MISSINGRELENTRY "Invalid Release file, no entry for %s" "$subpath"
+				fi
 			done
-			if [ ! -f "$pkgdest" ]; then
-				error 1 COULDNTDL "Couldn't download %s" "$m/$path"
-			fi
-			donepkgs=$(($donepkgs + ${i#* }))
-			progress $donepkgs $totalpkgs DOWNPKGS "Downloading Packages files"
+
+			donepkgs=0
+			progress 0 $totalpkgs DOWNPKGS "Downloading Packages files for $a"
+			for c in $COMPONENTS; do
+				subpath="$c/binary-$a/Packages"
+				path="dists/$s/$subpath"
+				xzi="$(get_release_checksum "$reldest" "$subpath.xz")"
+				bz2i="$(get_release_checksum "$reldest" "$subpath.bz2")"
+				gzi="$(get_release_checksum "$reldest" "$subpath.gz")"
+				normi="$(get_release_checksum "$reldest" "$subpath")"
+				ext=""
+				if [ "$acquirebyhash" != "" ]; then
+					ext="$ext byhash"
+				fi
+				if [ "$normi" != "" ]; then
+					ext="$ext $normi ."
+					i="$normi"
+				fi
+				if in_path unxz && [ "$xzi" != "" ]; then
+					ext="$ext $xzi xz"
+					i="${i:-$xzi}"
+				fi
+				if in_path bunzip2 && [ "$bz2i" != "" ]; then
+					ext="$ext $bz2i bz2"
+					i="${i:-$bz2i}"
+				fi
+				if in_path gunzip && [ "$gzi" != "" ]; then
+					ext="$ext $gzi gz"
+					i="${i:-$gzi}"
+				fi
+				progress_next $(($donepkgs + ${i#* }))
+				for m in $MIRRORS; do
+					pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$a" "$m" "$path")"
+					if get "$m/$path" "$pkgdest" $ext; then break; fi
+				done
+				if [ ! -f "$pkgdest" ]; then
+					error 1 COULDNTDL "Couldn't download %s" "$m/$path"
+				fi
+				donepkgs=$(($donepkgs + ${i#* }))
+				progress $donepkgs $totalpkgs DOWNPKGS "Downloading Packages files"
+			done
 		done
 	done
 }
@@ -793,7 +821,7 @@ download_debs () {
 
 download_release () {
 	local m1 numdebs countdebs totaldebs leftoverdebs path pkgdest \
-	      dloaddebs s c m
+	      dloaddebs archs s c a m
 	m1="${MIRRORS%% *}"
 
 	numdebs="$#"
@@ -808,25 +836,32 @@ download_release () {
 	leftoverdebs=$(printf "$leftoverdebs"|tr ' ' '\n'|sort -u|tr '\n' ' ')
 	numdebs=$(printf "$leftoverdebs"|wc -w)
 
+	archs="$ARCH"
+	if [ $ARCH_ALL_SUPPORTED -eq 1 ]; then
+		archs="all $ARCH"
+	fi
+
 	for s in $SUITE $EXTRA_SUITES; do
-		for c in $COMPONENTS; do
-			if [ "$countdebs" -ge "$numdebs" ]; then break; fi
+		for a in $archs; do
+			for c in $COMPONENTS; do
+				if [ "$countdebs" -ge "$numdebs" ]; then break; fi
 
-			path="dists/$s/$c/binary-$ARCH/Packages"
-			pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$ARCH" "$m1" "$path")"
-			if [ ! -e "$pkgdest" ]; then continue; fi
+				path="dists/$s/$c/binary-$a/Packages"
+				pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$a" "$m1" "$path")"
+				if [ ! -e "$pkgdest" ]; then continue; fi
 
-			info CHECKINGSIZES "Checking component %s on %s..." "$c" "$m1"
+				info CHECKINGSIZES "Checking component %s on %s..." "$c" "$m1"
 
-			leftoverdebs="$(get_package_sizes "$m1" "$pkgdest" $leftoverdebs)"
+				leftoverdebs="$(get_package_sizes "$m1" "$pkgdest" $leftoverdebs)"
 
-			countdebs=$(($countdebs + ${leftoverdebs%% *}))
-			leftoverdebs=${leftoverdebs#* }
+				countdebs=$(($countdebs + ${leftoverdebs%% *}))
+				leftoverdebs=${leftoverdebs#* }
 
-			totaldebs=${leftoverdebs%% *}
-			leftoverdebs=${leftoverdebs#* }
+				totaldebs=${leftoverdebs%% *}
+				leftoverdebs=${leftoverdebs#* }
 
-			progress "$countdebs" "$numdebs" SIZEDEBS "Finding package sizes"
+				progress "$countdebs" "$numdebs" SIZEDEBS "Finding package sizes"
+			done
 		done
 	done
 
@@ -841,15 +876,17 @@ download_release () {
 
 	pkgs_to_get="$*"
 	for s in $SUITE $EXTRA_SUITES; do
-		for c in $COMPONENTS; do
-			path="dists/$s/$c/binary-$ARCH/Packages"
-			for m in $MIRRORS; do
-				pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$ARCH" "$m" "$path")"
-				if [ ! -e "$pkgdest" ]; then continue; fi
-				pkgs_to_get="$(download_debs "$m" "$pkgdest" $pkgs_to_get 5>&1 1>&6)"
+		for a in $archs; do
+			for c in $COMPONENTS; do
+				path="dists/$s/$c/binary-$a/Packages"
+				for m in $MIRRORS; do
+					pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$a" "$m" "$path")"
+					if [ ! -e "$pkgdest" ]; then continue; fi
+					pkgs_to_get="$(download_debs "$m" "$pkgdest" $pkgs_to_get 5>&1 1>&6)"
+					if [ -z "$pkgs_to_get" ]; then break; fi
+				done 6>&1
 				if [ -z "$pkgs_to_get" ]; then break; fi
-			done 6>&1
-			if [ -z "$pkgs_to_get" ]; then break; fi
+			done
 		done
 		if [ -z "$pkgs_to_get" ]; then break; fi
 	done
@@ -933,15 +970,23 @@ download_main () {
 ###################################################### deb choosing support
 
 get_debs () {
-	local field m1 s c path pkgdest
+	local field m1 s c a path pkgdest
 	field="$1"
 	shift
+
+	archs="$ARCH"
+	if [ $ARCH_ALL_SUPPORTED -eq 1 ]; then
+		archs="all $ARCH"
+	fi
+
 	for m1 in $MIRRORS; do
 		for s in $SUITE $EXTRA_SUITES; do
 			for c in $COMPONENTS; do
-				path="dists/$s/$c/binary-$ARCH/Packages"
-				pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$ARCH" "$m1" "$path")"
-				echo "$("$PKGDETAILS" FIELD "$field" "$m1" "$pkgdest" "$@" | sed 's/ .*//')"
+				for a in $archs; do
+					path="dists/$s/$c/binary-$a/Packages"
+					pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$a" "$m1" "$path")"
+					echo "$("$PKGDETAILS" FIELD "$field" "$m1" "$pkgdest" "$@" | sed 's/ .*//')"
+				done
 			done
 		done
 	done
@@ -964,7 +1009,7 @@ extract_dpkg_deb_field () {
 extract_dpkg_deb_data () {
 	local pkg="$1"
 
-	dpkg-deb --fsys-tarfile "$pkg" | tar $EXTRACT_DEB_TAR_OPTIONS -xf - || error 1 FILEEXIST "Tried to extract package, but file already exists. Exit..."
+	dpkg-deb --fsys-tarfile "$pkg" | tar $EXTRACT_DEB_TAR_OPTIONS -xf - || error 1 FILEEXIST "Tried to extract package, but tar failed. Exit..."
 }
 
 # Raw .deb extractors
@@ -1166,17 +1211,116 @@ setup_dselect_method () {
 	esac
 }
 
-# Find out where the runtime dynamic linker and the shared libraries
-# can be installed on each architecture: native, multilib and multiarch.
-# This data can be verified by checking the files in the debian/sysdeps/
-# directory of the glibc package.
-#
-# This function must be updated to support any new architecture which
-# either installs the RTLD in a directory different from /lib or builds
-# multilib library packages.
+can_usrmerge_symlink() {
+	# Absolute symlinks can be relocated without problems.
+	test "${2#/}" = "$2" || return 0
+	while :; do
+		if test "${2#/}" != "$2"; then
+			# Handle double-slashes.
+			set -- "$1" "${2#/}"
+		elif test "${2#./}" != "$2"; then
+			# Handle ./ inside a link target.
+			set -- "$1" "${2#./}"
+		elif test "$2" = ..; then
+			# A parent directory symlink is ok if it does not
+			# cross the top level directory.
+			test "${1%/*/*}" != "$1" -a -n "${1%/*/*}"
+			return $?
+		elif test "${2#../}" != "$2"; then
+			# Symbolic link crossing / cannot be moved safely.
+			# This is prohibited by Debian Policy 10.5.
+			test "${1%/*/*}" = "$1" -o -z "${1%/*/*}" && return 1
+			set -- "${1%/*}" "${2#../}"
+		else
+			# Consider the symlink ok if its target does not
+			# contain a parent directory. When we fail here,
+			# the link target is non-minimal and doesn't happen
+			# in the archive.
+			test "${2#*/../}" = "$2"
+			return $?
+		fi
+	done
+}
+
+merge_usr_entry() {
+	local entry canon
+	canon="$TARGET/usr/${1#"$TARGET/"}"
+	test -h "$canon" &&
+		error 1 USRMERGEFAIL "cannot move %s as its destination exists as a symlink" "${1#"$TARGET"}"
+	if ! test -e "$canon"; then
+		mv "$1" "$canon"
+		return 0
+	fi
+	test -d "$1" ||
+		error 1 USRMERGEFAIL "cannot move non-directory %s as its destination exists" "${1#"$TARGET"}"
+	test -d "$canon" ||
+		error 1 USRMERGEFAIL "cannot move directory %s as its destination is not a directory" "${1#"$TARGET"}"
+	for entry in "$1/"* "$1/."*; do
+		# Some shells return . and .. on dot globs.
+		test "${entry%/.}" != "${entry%/..}" && continue
+		if test -h "$entry" && ! can_usrmerge_symlink "${entry#"$TARGET"}" "$(readlink "$entry")"; then
+			error 1 USRMERGEFAIL "cannot move relative symlink crossing top-level directory" "${entry#"$TARGET"}"
+		fi
+		# Ignore glob match failures
+		if test "${entry%'/*'}" != "${entry%'/.*'}" && ! test -e "$entry"; then
+			continue
+		fi
+		merge_usr_entry "$entry"
+	done
+	rmdir "$1"
+}
+
+merge_usr() {
+	if doing_variant buildd && [ -z "$MERGED_USR" ]; then
+	    case "$CODENAME" in
+		etch*|lenny|squeeze|wheezy|jessie*|stretch|buster|bullseye|bookworm)
+		    MERGED_USR="no"
+		    ;;
+	    esac
+	fi
+
+	if [ "$MERGED_USR" = "no" ]; then
+	    # With the usrmerge becoming pseudo-essential we need to use this flag
+	    # to ensure that even if it gets installed the buildd is not converted
+	    # when debootstrap needs to create an unmerged-usr installation.
+	    case "$CODENAME" in
+		etch*|lenny|squeeze|wheezy|jessie*|stretch|buster|bullseye)
+		    ;;
+		*)
+		    mkdir -p "$TARGET/etc"
+		    echo "this system will not be supported in the future" > "$TARGET/etc/unsupported-skip-usrmerge-conversion"
+		    if ! doing_variant buildd; then
+			warning SANITYCHECK "Upgrading non-merged-/usr environments post-bookworm is unsupported. Only do this for CI/QA infrastructure that will be re-bootstrapped rather than upgraded."
+		    fi
+		    ;;
+	    esac
+	    return 0;
+	fi
+
+	local dir
+	# This is list includes all possible multilib directories. It must be
+	# updated when new multilib directories are being added. Hopefully,
+	# all new architectures use multiarch instead, so we never get to
+	# update this.
+	for dir in bin lib lib32 lib64 libo32 libx32 sbin; do
+		test -h "$TARGET/$dir" && continue
+		test -e "$TARGET/$dir" || continue
+		merge_usr_entry "$TARGET/$dir"
+		ln -s "usr/$dir" "$TARGET/$dir"
+	done
+}
+
+# Previous implementation of merged /usr: not used within debootstrap,
+# but used by mmdebstrap's hooks/merged-usr/setup00.sh, mainly to get
+# the correct per-architecture $link_dir list of non-default multilib
+# directories.
 setup_merged_usr() {
 	if doing_variant buildd && [ -z "$MERGED_USR" ]; then
-		MERGED_USR="no"
+	    case "$CODENAME" in
+		etch*|lenny|squeeze|wheezy|jessie*|stretch|buster|bullseye|bookworm)
+		    MERGED_USR="no"
+		    ;;
+	    esac
 	fi
 
 	if [ "$MERGED_USR" = "no" ]; then
@@ -1323,7 +1467,7 @@ while (read STDIN, $x, 1) {
 }' "$@"
 		elif [ "$1" = "GETDEPS" ]; then
 			local pkgdest="$2"; shift; shift
-LC_ALL=C grep "$gropt" '^$|^Package:|^Depends:|^Pre-Depends:'  $pkgdest | perl -e '
+LC_ALL=C grep "$gropt" '^$|^Package:|^Depends:|^Pre-Depends:' "${pkgdest}" | perl -e '
 %seen = map { $_ => 1 } @ARGV;
 while (<STDIN>) {
 	if (/^Package: (.*)$/) {
@@ -1357,7 +1501,7 @@ while (<STDIN>) {
 			local m="$3"
 			local p="$4"
 			shift; shift; shift; shift
-			LC_ALL=C grep "$gropt" '^$|^Package:|^Priority:' "$p" | pkgdetails_field 0 "$f" "$m" "$@"
+			LC_ALL=C grep "$gropt" '^$|^Package:|^Priority:|^Essential:' "$p" | pkgdetails_field 0 "$f" "$m" "$@"
 		elif [ "$1" = "STANZAS" ]; then
 			local pkgdest="$2"; shift; shift
 			perl -e '
@@ -1395,14 +1539,22 @@ resolve_deps () {
 	local PKGS="$*"
 	local ALLPKGS="$PKGS";
 	local ALLPKGS2="";
-	local s c
+	local s c a
+
+	archs="$ARCH"
+	if [ $ARCH_ALL_SUPPORTED -eq 1 ]; then
+		archs="all $ARCH"
+	fi
+
 	while [ "$PKGS" != "" ]; do
 		local NEWPKGS=""
-		for s in $SUITE $EXTRA_SUITES; do
-			for c in ${COMPONENTS:-$(echo ${USE_COMPONENTS} | tr '|' ' ')}; do
-				local path="dists/$s/$c/binary-$ARCH/Packages"
-				local pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$ARCH" "$m1" "$path")"
-				NEWPKGS="$NEWPKGS $("$PKGDETAILS" GETDEPS "$pkgdest" $PKGS)"
+		for a in $archs; do
+			for s in $SUITE $EXTRA_SUITES; do
+				for c in ${COMPONENTS:-$(echo "${USE_COMPONENTS}" | tr '|' ' ')}; do
+					local path="dists/$s/$c/binary-$a/Packages"
+					local pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$a" "$m1" "$path")"
+					NEWPKGS="$NEWPKGS $("$PKGDETAILS" GETDEPS "$pkgdest" $PKGS)"
+				done
 			done
 		done
 		if [ -n "${EXCLUDE_DEPENDENCY:-}" ]; then
@@ -1410,11 +1562,13 @@ resolve_deps () {
 		fi
 		PKGS=$(echo "$PKGS $NEWPKGS" | tr ' ' '\n' | sort | uniq)
 		local REALPKGS=""
-		for s in $SUITE $EXTRA_SUITES; do
-			for c in ${COMPONENTS:-$(echo ${USE_COMPONENTS} | tr '|' ' ')}; do
-				local path="dists/$s/$c/binary-$ARCH/Packages"
-				local pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$ARCH" "$m1" "$path")"
-				REALPKGS="$REALPKGS $("$PKGDETAILS" PKGS REAL "$pkgdest" $PKGS | sed -n 's/ .*REAL.*$//p')"
+		for a in $archs; do
+			for s in $SUITE $EXTRA_SUITES; do
+				for c in ${COMPONENTS:-$(echo "${USE_COMPONENTS}" | tr '|' ' ')}; do
+					local path="dists/$s/$c/binary-$a/Packages"
+					local pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$a" "$m1" "$path")"
+					REALPKGS="$REALPKGS $("$PKGDETAILS" PKGS REAL "$pkgdest" $PKGS | sed -n 's/ .*REAL.*$//p')"
+				done
 			done
 		done
 		PKGS="$REALPKGS"
@@ -1429,15 +1583,22 @@ setup_available () {
 	local m1 c path pkgdest pkg
 	m1="${MIRRORS%% *}"
 
+	archs="$ARCH"
+	if [ $ARCH_ALL_SUPPORTED -eq 1 ]; then
+		archs="all $ARCH"
+	fi
+
 	for s in $SUITE $EXTRA_SUITES; do
-		for c in ${COMPONENTS:-$(echo ${USE_COMPONENTS} | tr '|' ' ')}; do
-			path="dists/$s/$c/binary-$ARCH/Packages"
-			pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$ARCH" "$m1" "$path")"
-			# XXX: What if a package is in more than one component?
-			# -- cjwatson 2009-07-29
-			# XXX: ...or suite?
-			# -- jrtc27 2019-06-11
-			"$PKGDETAILS" STANZAS "$pkgdest" "$@"
+		for a in $archs; do
+			for c in ${COMPONENTS:-$(echo "${USE_COMPONENTS}" | tr '|' ' ')}; do
+				path="dists/$s/$c/binary-$a/Packages"
+				pkgdest="$TARGET/$($DLDEST pkg "$s" "$c" "$a" "$m1" "$path")"
+				# XXX: What if a package is in more than one component?
+				# -- cjwatson 2009-07-29
+				# XXX: ...or suite?
+				# -- jrtc27 2019-06-11
+				"$PKGDETAILS" STANZAS "$pkgdest" "$@"
+			done
 		done
 	done >"$TARGET/var/lib/dpkg/available"
 

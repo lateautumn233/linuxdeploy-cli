@@ -54,8 +54,8 @@ first_stage_install () {
 	MERGED_USR="yes"
 	EXTRACT_DEB_TAR_OPTIONS="$EXTRACT_DEB_TAR_OPTIONS -k"
 
-	setup_merged_usr
 	extract $required
+	merge_usr
 
 	mkdir -p "$TARGET/var/lib/dpkg"
 	: >"$TARGET/var/lib/dpkg/status"

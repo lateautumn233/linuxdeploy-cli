@@ -106,7 +106,10 @@ usage()
       --variant=X            use variant X of the bootstrap scripts
                              (currently supported variants: buildd, fakechroot,
                               minbase)
+      --merged-usr           make /{bin,sbin,lib}/ symlinks to /usr/
+                             (default for newer Debian suites)
       --no-merged-usr        do not make /{bin,sbin,lib}/ symlinks to /usr/
+                             (default for older Debian suites)
       --keyring=K            check Release files against keyring K
       --no-check-gpg         avoid checking Release file signatures
       --force-check-gpg      force checking Release file signatures
@@ -455,7 +458,7 @@ if ! doing_variant fakechroot && command -v apt-config >/dev/null; then
     if [ -z "$AUTOPROXY" ]; then
         eval "$(apt-config shell AUTOPROXY Acquire::http::ProxyAutoDetect)"
     fi
-    if [ -z "$http_proxy" ] && [ -x "$AUTOPROXY" ]; then
+    if [ -z "${http_proxy+x}" ] && [ -x "$AUTOPROXY" ]; then
         http_proxy="$($AUTOPROXY)"
         if [ -n "$http_proxy" ]; then
             info AUTOPROXY "Using auto-detected proxy: $http_proxy"

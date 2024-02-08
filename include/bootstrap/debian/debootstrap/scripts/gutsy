@@ -138,8 +138,8 @@ first_stage_install () {
 			;;
 	esac
 
-	setup_merged_usr
 	extract $required
+	merge_usr
 
 	mkdir -p "$TARGET/var/lib/dpkg"
 	: >"$TARGET/var/lib/dpkg/status"

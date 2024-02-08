@@ -1,99 +1,48 @@
+case $ARCH in
+  amd64|i386)
+	default_mirror http://archive.trisquel.info/trisquel
+	;;
+  *)
+	default_mirror http://ports.trisquel.info/trisquel
+	;;
+esac
+mirror_style release
+download_style apt
+finddebs_style from-indices
+variants - buildd fakechroot minbase
+keyring /usr/share/keyrings/trisquel-archive-keyring.gpg
+
 if doing_variant fakechroot; then
 	test "$FAKECHROOT" = "true" || error 1 FAKECHROOTREQ "This variant requires fakechroot environment to be started"
 fi
 
 case $ARCH in
 	alpha|ia64) LIBC="libc6.1" ;;
-	kfreebsd-*) LIBC="libc0.1" ;;
-	hurd-*)     LIBC="libc0.3" ;;
 	*)          LIBC="libc6" ;;
 esac
 
 work_out_debs () {
-	case "$CODENAME" in
-		etch*|lenny|squeeze|wheezy|jessie*|stretch|buster|bullseye|bookworm)
-			# always compute for bookworm and earlier
-			required="$(get_debs Priority: required)"
-			;;
-		*)
-			# only compute when variant is not buildd for trixie and later
-			if ! doing_variant buildd; then
-				required="$(get_debs Priority: required)"
-			fi
-	esac
+	required="$(get_debs Priority: required)"
 
-	if doing_variant - || doing_variant fakechroot; then
+	if doing_variant -; then
 		#required="$required $(get_debs Priority: important)"
 		#  ^^ should be getting debconf here somehow maybe
 		base="$(get_debs Priority: important)"
 	elif doing_variant buildd; then
-		base="apt build-essential"
-		# do not install Priority:required for the buildd variant
-		# explicitly add mawk because we cannot resolve base-files's
-		# virtual pre-depends on awk
-		case "$CODENAME" in
-			etch*|lenny|squeeze|wheezy|jessie*|stretch|buster|bullseye|bookworm)
-				# only apply this for trixie and later
-				;;
-			*) required="mawk $(get_debs Essential: yes)";;
-		esac
-	elif doing_variant minbase; then
+		base="$(get_debs Build-Essential: yes)"
+	elif doing_variant fakechroot || doing_variant minbase; then
 		base="apt"
-	fi
-
-	if doing_variant fakechroot; then
-		# ldd.fake needs binutils
-		required="$required binutils"
 	fi
 
 	case $MIRRORS in
 	    https://*)
-		case "$CODENAME" in
-			# apt-transport-https exists from lenny to stretch
-			lenny|squeeze|wheezy|jessie*|stretch)
-			base="$base apt-transport-https ca-certificates"
-			;;
-			*)
-			base="$base ca-certificates"
-			;;
-		esac
+		base="$base apt-transport-https ca-certificates"
 		;;
-	esac
-
-	# On suites >= bookworm, either we set up a merged-/usr system
-	# via merge_usr, or we deliberately avoid that migration by creating
-	# the flag file. This means there's no need for the live migration
-	# 'usrmerge' package and its extra dependencies:
-	# we can install the empty 'usr-is-merged' metapackage to indicate
-	# that the transition has been done.
-	case "$CODENAME" in
-		etch*|lenny|squeeze|wheezy|jessie*|stretch|buster|bullseye)
-			;;
-		*)
-			required="$required usr-is-merged"
-			EXCLUDE_DEPENDENCY="$EXCLUDE_DEPENDENCY usrmerge"
-			;;
 	esac
 }
 
 first_stage_install () {
-	case "$CODENAME" in
-		# "merged-usr" blacklist for past releases
-		etch*|lenny|squeeze|wheezy|jessie*)
-			[ -z "$MERGED_USR" ] && MERGED_USR="no"
-			;;
-		*)
-			# see https://bugs.debian.org/838388
-			EXTRACT_DEB_TAR_OPTIONS="$EXTRACT_DEB_TAR_OPTIONS -k"
-			;;
-	esac
-
-	if [ "$CODENAME" = "stretch" ] && [ -z "$MERGED_USR" ]; then
-		MERGED_USR="no"
-	fi
-
 	extract $required
-	merge_usr
 
 	mkdir -p "$TARGET/var/lib/dpkg"
 	: >"$TARGET/var/lib/dpkg/status"
@@ -107,34 +56,25 @@ first_stage_install () {
 
 	setup_devices
 
-	if doing_variant fakechroot || [ "$CONTAINER" = "docker" ]; then
-		setup_proc_symlink
-	fi
-}
-
-second_stage_install () {
-	in_target /bin/true
-
-	setup_dynamic_devices
-
 	x_feign_install () {
 		local pkg="$1"
 		local deb="$(debfor $pkg)"
-		local ver="$(in_target dpkg-deb -f "$deb" Version)"
+		local ver="$(extract_deb_field "$TARGET/$deb" Version)"
 
 		mkdir -p "$TARGET/var/lib/dpkg/info"
 
 		echo \
 "Package: $pkg
 Version: $ver
-Maintainer: unknown
 Status: install ok installed" >> "$TARGET/var/lib/dpkg/status"
 
 		touch "$TARGET/var/lib/dpkg/info/${pkg}.list"
 	}
 
 	x_feign_install dpkg
+}
 
+second_stage_install () {
 	x_core_install () {
 		smallyes '' | in_target dpkg --force-depends --install $(debfor "$@")
 	}
@@ -143,7 +83,9 @@ Status: install ok installed" >> "$TARGET/var/lib/dpkg/status"
 		baseprog="$(($baseprog + ${1:-1}))"
 	}
 
-	if ! doing_variant fakechroot; then
+	if doing_variant fakechroot; then
+		setup_proc_fakechroot
+	else
 		setup_proc
 		in_target /sbin/ldconfig
 	fi
@@ -166,7 +108,7 @@ Status: install ok installed" >> "$TARGET/var/lib/dpkg/status"
 	x_core_install dpkg
 
 	if [ ! -e "$TARGET/etc/localtime" ]; then
-		ln -sf /usr/share/zoneinfo/UTC "$TARGET/etc/localtime"
+		ln -sf /usr/share/zoneinfo/Etc/UTC "$TARGET/etc/localtime"
 	fi
 
 	if doing_variant fakechroot; then
@@ -193,14 +135,17 @@ Status: install ok installed" >> "$TARGET/var/lib/dpkg/status"
 
 	info UNPACKREQ "Unpacking required packages..."
 
-	exec 7>&1
-
 	smallyes '' |
 		(repeatn 5 in_target_failmsg UNPACK_REQ_FAIL_FIVE "Failure while unpacking required packages.  This will be attempted up to five times." "" \
-		dpkg --status-fd 8 --force-depends --unpack $(debfor $required) 8>&1 1>&7 || echo EXITCODE $?) |
-		dpkg_progress $baseprog $bases UNPACKREQ "Unpacking required packages" UNPACKING
+		dpkg --status-fd 8 --force-depends --unpack $(debfor $required) 8>&1 1>&7 |
+		dpkg_progress $baseprog $bases UNPACKREQ "Unpacking required packages" UNPACKING) 7>&1
 
 	info CONFREQ "Configuring required packages..."
+
+	if doing_variant fakechroot; then
+	# fix initscripts postinst (no mounting possible, and wrong if condition)
+	sed -i '/dpkg.*--compare-versions/ s/\<lt\>/lt-nl/' "$TARGET/var/lib/dpkg/info/initscripts.postinst"
+	fi
 
 	echo \
 "#!/bin/sh
@@ -214,12 +159,22 @@ echo
 echo \"Warning: Fake start-stop-daemon called, doing nothing\"" > "$TARGET/sbin/start-stop-daemon"
 	chmod 755 "$TARGET/sbin/start-stop-daemon"
 
+	if [ -x "$TARGET/sbin/initctl" ]; then
+	  mv "$TARGET/sbin/initctl" "$TARGET/sbin/initctl.REAL"
+	  echo \
+"#!/bin/sh
+if [ \"\$1\" = version ]; then exec /sbin/initctl.REAL \"\$@\"; fi
+echo
+echo \"Warning: Fake initctl called, doing nothing\"" > "$TARGET/sbin/initctl"
+	  chmod 755 "$TARGET/sbin/initctl"
+	fi
+
 	setup_dselect_method apt
 
 	smallyes '' |
 		(in_target_failmsg CONF_REQ_FAIL "Failure while configuring required packages." "" \
-		dpkg --status-fd 8 --configure --pending --force-configure-any --force-depends 8>&1 1>&7 || echo EXITCODE $?) |
-		dpkg_progress $baseprog $bases CONFREQ "Configuring required packages" CONFIGURING
+		dpkg --status-fd 8 --configure --pending --force-configure-any --force-depends 8>&1 1>&7 |
+		dpkg_progress $baseprog $bases CONFREQ "Configuring required packages" CONFIGURING) 7>&1
 
 	baseprog=0
 	bases="$(set -- $base; echo $#)"
@@ -240,20 +195,21 @@ echo \"Warning: Fake start-stop-daemon called, doing nothing\"" > "$TARGET/sbin/
 		done_predeps="$done_predeps $predep"
 	done
 
-	if [ -n "$base" ]; then
-		smallyes '' |
-			(repeatn 5 in_target_failmsg INST_BASE_FAIL_FIVE "Failure while installing base packages.  This will be re-attempted up to five times." "" \
-			dpkg --status-fd 8 --force-overwrite --force-confold --skip-same-version --unpack $(debfor $base) 8>&1 1>&7 || echo EXITCODE $?) |
-			dpkg_progress $baseprog $bases UNPACKBASE "Unpacking base system" UNPACKING
+	smallyes '' |
+		(repeatn 5 in_target_failmsg INST_BASE_FAIL_FIVE "Failure while installing base packages.  This will be re-attempted up to five times." "" \
+		dpkg --status-fd 8 --force-overwrite --force-confold --skip-same-version --unpack $(debfor $base) 8>&1 1>&7 |
+		dpkg_progress $baseprog $bases UNPACKBASE "Unpacking base system" UNPACKING) 7>&1
 
-		info CONFBASE "Configuring the base system..."
+	info CONFBASE "Configuring the base system..."
 
-		smallyes '' |
-			(repeatn 5 in_target_failmsg CONF_BASE_FAIL_FIVE "Failure while configuring base packages.  This will be re-attempted up to five times." "" \
-			dpkg --status-fd 8 --force-confold --skip-same-version --configure -a 8>&1 1>&7 || echo EXITCODE $?) |
-			dpkg_progress $baseprog $bases CONFBASE "Configuring base system" CONFIGURING
+	smallyes '' |
+		(repeatn 5 in_target_failmsg CONF_BASE_FAIL_FIVE "Failure while configuring base packages.  This will be re-attempted up to five times." "" \
+		dpkg --status-fd 8 --force-confold --skip-same-version --configure -a 8>&1 1>&7 |
+		dpkg_progress $baseprog $bases CONFBASE "Configuring base system" CONFIGURING) 7>&1
+
+	if [ -x "$TARGET/sbin/initctl.REAL" ]; then
+		mv "$TARGET/sbin/initctl.REAL" "$TARGET/sbin/initctl"
 	fi
-
 	mv "$TARGET/sbin/start-stop-daemon.REAL" "$TARGET/sbin/start-stop-daemon"
 	rm -f "$TARGET/usr/sbin/policy-rc.d"
 
